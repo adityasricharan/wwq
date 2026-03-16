@@ -9,7 +9,7 @@ echo "======================================================="
 
 # Ollama is now entirely optional and models will be pulled dynamically in-game if requested.
 # OTA Update for the Offline Knowledge Bank
-OTA_URL="https://raw.githubusercontent.com/YOUR_GITHUB_NAME/WW-Trivia-CLI/main/questions.enc"
+OTA_URL="https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc"
 if [ -n "$OTA_URL" ]; then
     echo "[INFO] Checking for offline knowledge bank updates..."
     if curl -s --head -f "$OTA_URL" >/dev/null 2>&1; then
