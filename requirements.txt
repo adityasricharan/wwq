@@ -1,0 +1,6 @@
+litellm>=1.35.0
+ollama>=0.2.0
+rich
+pydantic
+python-dotenv
+cryptography
