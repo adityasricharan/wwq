@@ -97,53 +97,106 @@ Theoretical Maximum: 80.0
 
 ---
 
-## Developer Guide: Re-seeding the Knowledge Bank
+## Question Bank Management
 
-### Full Re-seed (from scratch)
-If you want to build an entirely new bank (e.g., a Vietnam War edition):
+### How Updates Work
 
-1. **Get an API Key:** Add your Gemini API Key to `.env`.
-2. **Configure `generate_db.py`:** Update the prompt or the `target_questions` count.
-3. **Run the Generator:**
-   ```bash
-   python generate_db.py
-   ```
-4. **Encrypt the Output:**
-   ```bash
-   python encrypt_db.py
-   ```
-5. **Update the Secret Key:** Copy the new encryption key and update `DATABASE_DECRYPTION_KEY` in `database.py`.
+Every time you launch the game via `wwq.bat` or `wwq.sh`, two things happen automatically:
 
-### Partial Refresh (history-driven, recommended)
-After players have asked many questions, use `refresh_db.py` to retire the most over-used questions and replace them with fresh ones — without regenerating the entire bank.
+| Update type | What happens |
+|---|---|
+| **Official bank update** | Downloads the latest `questions.enc` from GitHub |
+| **Code update** | Checks for a new app version and downloads changed Python files |
 
-The default replaces **200 questions** (~10% of the bank) that have been asked **3 or more times** globally. This keeps the game feeling varied without the cost of a full re-seed.
+If you have a **custom bank active**, OTA updates the official backup in the background without touching your custom bank.
+
+### Game Seeds & Bank Versions
+
+Seeds now include the bank version: `A3F2C1@v2`
+
+- Share this code with a friend to play the **exact same quiz**
+- If their bank version differs, the game shows a warning: *"Questions may differ — run ./wwq to sync"*
+- Old seeds (without `@v`) still work — no warning shown
+
+### Creating a Custom Question Bank
+
+Build your own themed bank with any model and topics:
 
 ```bash
-# See what would be replaced (no changes made)
-python refresh_db.py --dry-run
+python seed_bank.py                                     # Interactive wizard
+python seed_bank.py --count 500 --topics "Cold War, Korean War"
+python seed_bank.py --count 200 --model openai/gpt-4o  # Use any LiteLLM model
+```
 
-# Run the actual refresh (requires GOOGLE_API_KEY in .env)
-python refresh_db.py
+- The official bank is automatically backed up to `questions.enc.official` the **first time** you run this
+- If generation fails (bad API key, rate limit, etc.), your bank is **never overwritten**
+- To share your custom bank with friends: copy `questions.enc` to their game folder
 
-# Custom options
+### Restoring the Official Bank
+
+In-game: **Settings → Manage Bank → Restore Official Bank**
+
+Or manually:
+```bash
+# From local backup (instant):
+copy questions.enc.official questions.enc
+
+# Re-download from GitHub:
+curl -L -o questions.enc https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc
+```
+
+---
+
+## Developer Guide: Question Bank Refresh
+
+### Simulate Usage Data (recommended before refreshing)
+
+Run the simulation agent to generate realistic question history without manual play:
+
+```bash
+# Simulate 50 sessions at intermediate skill level
+python adversary/simulate_games.py --sessions 50 --skill intermediate
+
+# Dry run — show what the history would look like without saving
+python adversary/simulate_games.py --sessions 100 --skill random --dry-run
+```
+
+Skill profiles: `beginner`, `intermediate`, `expert`, `random`
+
+### Partial Refresh (history-driven)
+
+Retires the most over-used questions and replaces them with fresh ones:
+
+```bash
+python refresh_db.py --dry-run        # Preview what would be replaced
+python refresh_db.py                  # Replace top 200 questions (≥3 asks)
 python refresh_db.py --count 128 --threshold 5
 ```
 
-After refreshing, push the updated `questions.enc` to GitHub so OTA updates distribute it to all players.
-
+Push the updated bank so all players receive it via OTA:
 ```bash
-git add questions.enc
+git add questions.enc version.txt
 git commit -m "refresh: retire top-200 overused questions"
 git push origin master
 ```
 
+### Full Re-seed (from scratch)
+
+```bash
+python generate_db.py    # Generate questions_raw.json
+python encrypt_db.py     # Wrap in version envelope and encrypt
+# Update DATABASE_DECRYPTION_KEY in database.py with the printed key
+```
+
+---
 
 ## Troubleshooting
 
-- **"Module Not Found":** Ensure you are running the game through `wwq.bat` or `wwq.sh`, which automatically handles the virtual environment and `pip install`.
-- **API Errors (In Online Mode):** Check your internet connection and ensure your `.env` key is valid. The game will gracefully fall back to the `local_bank` if an online connection fails.
-- **OTA Update Fails:** If the GitHub ping fails, the game will simply skip the update and load your last saved `questions.enc`.
+- **"Module Not Found":** Run the game through `wwq.bat` or `wwq.sh` — they handle the virtual environment automatically.
+- **API Errors:** Check your internet connection and `.env` key. The game falls back to `local_bank` if an online connection fails.
+- **OTA Update Fails:** Game continues with your last saved `questions.enc`. Try relaunching.
+- **Custom bank seeding fails:** Your official bank is safe in `questions.enc.official`. Restore via Settings → Manage Bank.
+- **Seed version mismatch warning:** Run `./wwq` to download the latest bank and re-launch.
 
 ## License & Contributing
 

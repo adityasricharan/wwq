@@ -17,6 +17,69 @@ console = Console()
 def print_header():
     console.print(Panel.fit("[bold yellow]WW1 & WW2 Agentic Trivia[/bold yellow]\n[italic]A Dynamic Historical Quiz[/italic]", border_style="yellow"))
 
+def bank_management_menu():
+    """Settings sub-menu for managing the question bank."""
+    from database import active_bank
+    import shutil, urllib.request
+
+    OFFICIAL_BACKUP = "questions.enc.official"
+    DB_PATH = "questions.enc"
+    OTA_URL = "https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc"
+
+    bank_label = "[yellow]Custom[/yellow]" if os.path.exists(OFFICIAL_BACKUP) else "[green]Official[/green]"
+    bv = active_bank.bank_version
+    qcount = len(active_bank._questions)
+
+    while True:
+        console.print(f"\n[bold yellow]--- Bank Management ---[/bold yellow]")
+        console.print(f"  Active: {bank_label}  |  Bank v{bv}  |  {qcount} questions")
+        console.print("1. Restore Official Bank (from local backup)")
+        console.print("2. Re-download Official Bank from GitHub")
+        console.print("3. View Bank Statistics")
+        console.print("4. Back")
+
+        sub = Prompt.ask("Select", choices=["1", "2", "3", "4"])
+
+        if sub == "1":
+            if not os.path.exists(OFFICIAL_BACKUP):
+                console.print("[yellow]No local backup found (questions.enc.official). Use option 2 to re-download.[/yellow]")
+            else:
+                shutil.copy2(OFFICIAL_BACKUP, DB_PATH)
+                console.print("[green]✅ Official bank restored from local backup. Relaunch the game to apply.[/green]")
+                if os.path.exists(OFFICIAL_BACKUP):
+                    os.remove(OFFICIAL_BACKUP)
+                    console.print("[dim]Backup file removed (you are now on the official bank).[/dim]")
+
+        elif sub == "2":
+            console.print("[cyan]Downloading official bank from GitHub...[/cyan]")
+            try:
+                tmp = DB_PATH + ".ota.tmp"
+                urllib.request.urlretrieve(OTA_URL, tmp)
+                # If user has a custom bank, update the official backup
+                if os.path.exists(OFFICIAL_BACKUP):
+                    shutil.move(tmp, OFFICIAL_BACKUP)
+                    console.print("[green]✅ Official backup updated from GitHub. Your custom bank is unchanged.[/green]")
+                else:
+                    shutil.move(tmp, DB_PATH)
+                    console.print("[green]✅ Official bank re-downloaded. Relaunch to apply.[/green]")
+            except Exception as e:
+                console.print(f"[red]Download failed: {e}[/red]")
+
+        elif sub == "3":
+            from collections import Counter
+            diff_counts = Counter(q.difficulty for q in active_bank._questions)
+            console.print("\n[bold]Bank Statistics[/bold]")
+            for d in sorted(diff_counts):
+                console.print(f"  Difficulty {d}: {diff_counts[d]} questions")
+            import question_history as qh
+            h = qh.load_history()
+            console.print(f"  Sessions tracked: {h.get('total_sessions', 0)}")
+            console.print(f"  Questions in history: {len(h.get('entries', {}))}")
+
+        elif sub == "4":
+            break
+
+
 def settings_menu(state: GameState):
     while True:
         console.print("\n[bold yellow]--- Settings ---[/bold yellow]")
@@ -24,9 +87,10 @@ def settings_menu(state: GameState):
         console.print(f"2. Change Topic (Current: {state.config.topic})")
         console.print(f"3. Override Difficulty (Current: {state.override_difficulty if state.override_difficulty else 'Auto'})")
         console.print("4. Set API Key")
-        console.print("5. Return to Game")
-        
-        choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5"])
+        console.print("5. Manage Question Bank")
+        console.print("6. Return to Game")
+
+        choice = Prompt.ask("Select an option", choices=["1", "2", "3", "4", "5", "6"])
         if choice == "1":
             provider = Prompt.ask("Choose provider", choices=["local_bank", "gemini", "ollama", "openai"])
             state.config.llm_provider = provider
@@ -43,7 +107,7 @@ def settings_menu(state: GameState):
                     for m in models_list:
                         name = m.get("model", m.get("name")) if isinstance(m, dict) else getattr(m, "model", getattr(m, "name", str(m)))
                         if name: available_models.append(name)
-                        
+
                     if available_models:
                         console.print("\n[bold green]Available Local Ollama Models:[/bold green]")
                         for m in available_models:
@@ -52,7 +116,7 @@ def settings_menu(state: GameState):
                         console.print("\n[yellow]No Ollama models downloaded yet.[/yellow]")
                 except Exception as e:
                     console.print(f"\n[yellow]Could not fetch local models. Ensure Ollama is installed and running. ({e})[/yellow]")
-                
+
                 model_choice = Prompt.ask("\nEnter Ollama model name", default="qwen2.5:0.5b")
                 try:
                     with console.status(f"[bold cyan]Fetching and verifying model '{model_choice}'...[/bold cyan]"):
@@ -82,36 +146,45 @@ def settings_menu(state: GameState):
                 os.environ["GOOGLE_API_KEY"] = key
                 set_key(".env", "GOOGLE_API_KEY", key)
         elif choice == "5":
+            bank_management_menu()
+        elif choice == "6":
             break
 
 def setup_game() -> GameState:
     print_header()
-    
+    from database import active_bank
+
     use_custom_seed = Confirm.ask("Do you have a deterministic hashcode/seed you want to play with?", default=False)
     if use_custom_seed:
         seed_hash = Prompt.ask("Enter seed")
-        seed, topic = decode_seed(seed_hash)
+        seed, topic, seed_bank_version = decode_seed(seed_hash)
         config = QuizConfig(topic=topic)
         console.print(f"\n[bold green]Loaded Game Seed:[/bold green] {seed_hash}")
         console.print(f"[bold green]Topic:[/bold green] {topic}")
+        # Warn if bank versions differ
+        if seed_bank_version is not None and active_bank.bank_version != seed_bank_version:
+            console.print(f"\n[yellow]⚠️  Bank version mismatch: seed was created on Bank v{seed_bank_version}, "
+                          f"but your bank is v{active_bank.bank_version}.[/yellow]")
+            console.print("[dim]   Questions may differ from the original session. "
+                          "Run ./wwq to check for bank updates.[/dim]")
     else:
         topic = Prompt.ask("Any specific topic or focus? (e.g., 'Spies', 'Weapons', 'Naval Battles') [Leave blank for General]", default="General WW1 and WW2 History")
-        seed_hash = generate_seed(topic)
-        seed, _ = decode_seed(seed_hash)
+        seed_hash = generate_seed(topic, bank_version=active_bank.bank_version)
+        seed, _, _ = decode_seed(seed_hash)
         config = QuizConfig(topic=topic)
         console.print(f"\n[bold green]Game Seed (Share this short code with friends!):[/bold green] [bold white]{seed_hash}[/bold white]")
-        
+
     random.seed(seed)
-    
+
     state = GameState(seed=seed_hash, config=config)
-    
+
     if not os.environ.get("GOOGLE_API_KEY") and state.config.llm_provider == "gemini":
         console.print("\n[yellow]Google Gemini requires an API key.[/yellow]")
         key = Prompt.ask("Please paste your free Google Gemini API Key (or press Enter to skip and set it later in Settings)").strip()
         if key:
             os.environ["GOOGLE_API_KEY"] = key
             set_key(".env", "GOOGLE_API_KEY", key)
-            
+
     return state
 
 def play_round(state: GameState, history: dict):

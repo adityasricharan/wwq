@@ -6,20 +6,35 @@ echo =======================================================
 echo          WW1 ^& WW2 Agentic Trivia CLI Setup
 echo =======================================================
 
-:: Ollama is now entirely optional and models will be pulled dynamically in-game if requested.
 :: OTA Update for the Offline Knowledge Bank
 set "OTA_URL=https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc"
 if not "%OTA_URL%"=="" (
-    echo [INFO] Checking for offline knowledge bank updates...
     curl -s --head -f "%OTA_URL%" >nul 2>&1
     if !errorlevel! equ 0 (
-        curl -s -L -o "questions.enc.tmp" "%OTA_URL%"
-        if exist "questions.enc.tmp" (
-            move /y "questions.enc.tmp" "questions.enc" >nul
-            echo [INFO] Knowledge bank updated successfully.
+        :: Check if user has a custom bank active (questions.enc.official exists)
+        if exist "questions.enc.official" (
+            :: User has a custom bank — update official backup only, leave custom bank intact
+            echo [INFO] Checking for official knowledge bank updates...
+            curl -s -L -o "questions.enc.official.tmp" "%OTA_URL%"
+            if exist "questions.enc.official.tmp" (
+                move /y "questions.enc.official.tmp" "questions.enc.official" >nul
+                echo [INFO] Official bank updated in background. Your custom bank is unchanged.
+            )
+        ) else (
+            :: User is on official bank — update questions.enc directly
+            echo [INFO] Checking for offline knowledge bank updates...
+            curl -s -L -o "questions.enc.tmp" "%OTA_URL%"
+            if exist "questions.enc.tmp" (
+                move /y "questions.enc.tmp" "questions.enc" >nul
+                echo [INFO] Knowledge bank updated successfully.
+            )
         )
     )
 )
+
+:: Code OTA — check for and apply Python source updates
+python updater.py
+
 
 :: Check if Python is installed
 python --version >nul 2>&1

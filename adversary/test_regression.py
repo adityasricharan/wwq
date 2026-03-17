@@ -38,21 +38,30 @@ class TestSeedEncoding:
         """Encoding and then decoding a seed must return the same values."""
         for topic in [DEFAULT_TOPIC, "Naval Battles", "Spies & Espionage"]:
             seed_code = generate_seed(topic)
-            recovered_seed, recovered_topic = decode_seed(seed_code)
+            recovered_seed, recovered_topic, _ = decode_seed(seed_code)
             assert recovered_topic == topic, f"Topic mismatch: got '{recovered_topic}', expected '{topic}'"
             assert len(recovered_seed) == 6, "Internal seed should always be 6 chars"
+
+    def test_seed_with_bank_version(self):
+        """Seeds generated with bank_version > 0 must embed @vN and decode it."""
+        seed_code = generate_seed(DEFAULT_TOPIC, bank_version=3)
+        assert "@v3" in seed_code
+        _, _, bv = decode_seed(seed_code)
+        assert bv == 3
 
     def test_old_base64_seed_backward_compat(self):
         """Old long base64 seeds must still decode correctly."""
         old_seed = "eyJzIjogIlNHQ0gxTiIsICJ0IjogIkdlbmVyYWwgV1cxIGFuZCBXVzIgSGlzdG9yeSJ9"
-        s, t = decode_seed(old_seed)
+        s, t, bv = decode_seed(old_seed)
         assert len(s) == 6, f"Decoded internal seed should be 6 chars, got '{s}'"
         assert "WW" in t or "General" in t, f"Decoded topic looks wrong: '{t}'"
+        assert bv is None, "Old base64 seeds must decode with bank_version=None"
 
     def test_decode_bare_code(self):
-        """A bare 6-char code with no topic should decode to the default topic."""
-        _, topic = decode_seed("ABC123")
+        """A bare 6-char code with no topic or version should decode to defaults."""
+        _, topic, bv = decode_seed("ABC123")
         assert topic == DEFAULT_TOPIC
+        assert bv is None
 
 # ─── Database Tests ────────────────────────────────────────────────────────────
 

@@ -18,25 +18,37 @@ class LocalKnowledgeBank:
     def __init__(self, db_path="questions.enc"):
         self.db_path = db_path
         self._questions = []
+        self.bank_version = 0  # Set by _load_and_decrypt from the version envelope
         self._load_and_decrypt()
+
 
     def _load_and_decrypt(self):
         """Loads and decrypts the knowledge bank into memory."""
         if not os.path.exists(self.db_path):
             print(f"[ERROR] Database file '{self.db_path}' not found. Cannot load offline local bank.")
             return
-            
+
         try:
             cipher = Fernet(DATABASE_DECRYPTION_KEY)
             with open(self.db_path, "rb") as f:
                 encrypted_data = f.read()
-                
-            decrypted_data = cipher.decrypt(encrypted_data).decode('utf-8')
-            raw_json = json.loads(decrypted_data)
-            
-            self._questions = [Question.model_validate(q) for q in raw_json]
+
+            decrypted_data = cipher.decrypt(encrypted_data).decode("utf-8")
+            raw = json.loads(decrypted_data)
+
+            # Support both old format (bare list) and new versioned envelope
+            if isinstance(raw, dict) and "questions" in raw:
+                self.bank_version = raw.get("bank_version", 1)
+                questions_list = raw["questions"]
+            else:
+                # Legacy format — bare list
+                self.bank_version = 0
+                questions_list = raw
+
+            self._questions = [Question.model_validate(q) for q in questions_list]
         except Exception as e:
             print(f"[ERROR] Failed to decrypt local knowledge bank: {e}")
+
 
     def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None, history: dict = None) -> Question:
         """Finds a matching question using difficulty, topic, and inverse-frequency weighted sampling.
