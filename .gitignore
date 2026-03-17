@@ -18,6 +18,10 @@ questions.json
 *.db
 *.sqlite3
 
+# Per-user question history (local state, not shared)
+question_history.json
+question_history.json.tmp
+
 # OS generated files
 .DS_Store
 .DS_Store?

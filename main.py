@@ -9,6 +9,7 @@ from rich.prompt import Prompt, Confirm
 
 from state import GameState, QuizConfig, generate_seed, decode_seed
 from agents import generate_question, validate_question
+import question_history as qh
 
 load_dotenv()
 console = Console()
@@ -113,7 +114,7 @@ def setup_game() -> GameState:
             
     return state
 
-def play_round(state: GameState):
+def play_round(state: GameState, history: dict):
     diff_to_use = state.override_difficulty if state.override_difficulty is not None else state.current_difficulty
     console.print(f"\n[bold blue]--- Question {state.questions_answered + 1} (Difficulty: {diff_to_use}) ---[/bold blue]")
     
@@ -127,7 +128,7 @@ def play_round(state: GameState):
         
         while not valid and attempts < 3:
             try:
-                question = generate_question(state.config.llm_provider, state.config.llm_model, state.config.topic, state.config.format, diff_to_use, model_seed, state.seen_questions)
+                question = generate_question(state.config.llm_provider, state.config.llm_model, state.config.topic, state.config.format, diff_to_use, model_seed, state.seen_questions, history=history)
                 status.update("[bold cyan]The Fact Checker is reviewing the question...[/bold cyan]")
                 
                 validation = validate_question(state.config.llm_provider, state.config.llm_model, question)
@@ -208,6 +209,7 @@ def play_round(state: GameState):
     chosen_answer = options[int(choice_idx) - 1]
     
     state.seen_questions.add(question.question_text)
+    qh.record_asked(history, question.question_text)
     
     earned = 0
     if chosen_answer == question.correct_answer:
@@ -287,33 +289,34 @@ def display_review(state: GameState):
     console.print(f"[bold gold1]Your Historical Knowledge Scale: {scale} / 10[/bold gold1]")
 
 def main():
+    # Load global question history for weighted sampling
+    history = qh.load_history()
+    qh.start_new_session(history)
+
     state = setup_game()
-    
+
     while True:
         if state.questions_answered >= 20:
             console.print("\n[bold yellow]You have reached the maximum length of 20 questions for this session![/bold yellow]")
             break
-            
-        play_round(state)
+
+        play_round(state, history)
         choice = Prompt.ask("\n[bold yellow]Continue to next question?[/bold yellow] (y/n/s for settings/exit to quit)", choices=["y", "n", "s", "exit"], default="y")
-        
+
         if choice == "exit":
             break
-            
+
         while choice == "s":
             settings_menu(state)
             choice = Prompt.ask("\n[bold yellow]Continue to next question?[/bold yellow] (y/n/s for settings/exit to quit)", choices=["y", "n", "s", "exit"], default="y")
             if choice == "exit":
                 break
-                
+
         if choice == "n" or choice == "exit":
             break
-            settings_menu(state)
-            choice = Prompt.ask("\n[bold yellow]Continue to next question?[/bold yellow] (y/n/s for settings)", choices=["y", "n", "s"], default="y")
-        if choice == "n":
-            break
-            
+
     display_review(state)
+    qh.save_history(history)
     console.print(f"\n[bold cyan]Game Seed: {state.seed}[/bold cyan]")
     if ":" in state.seed:
         short, topic = state.seed.split(":", 1)
@@ -321,6 +324,7 @@ def main():
     else:
         console.print(f"[dim]Share the code [bold]{state.seed}[/bold] with friends to replay this exact quiz![/dim]")
     console.print("[green]Thanks for playing![/green]")
+
 
 if __name__ == "__main__":
     main()

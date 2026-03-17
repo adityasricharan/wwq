@@ -38,19 +38,29 @@ class LocalKnowledgeBank:
         except Exception as e:
             print(f"[ERROR] Failed to decrypt local knowledge bank: {e}")
 
-    def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None) -> Question:
-        """Finds a matching question based on difficulty and topic using the deterministic random seed."""
+    def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None, history: dict = None) -> Question:
+        """Finds a matching question using difficulty, topic, and inverse-frequency weighted sampling.
+
+        Args:
+            difficulty: Target difficulty (1-5).
+            random_seed: Deterministic seed for reproducible sessions.
+            topic: Topic filter; 'General WW1 and WW2 History' matches all.
+            seen_questions: Set of question texts already shown this session.
+            history: The global question history dict from question_history.py.
+                     If None, falls back to uniform random sampling (no weighting).
+        """
         import random
+        from question_history import get_weights_for_candidates
         random.seed(random_seed)
-        
+
         candidates = []
         if seen_questions is None:
             seen_questions = set()
-            
+
         for q in self._questions:
             if q.question_text in seen_questions:
                 continue
-            
+
             # For Local Bank, "General WW1 and WW2 History" allows everything.
             if topic == "General WW1 and WW2 History":
                 if q.difficulty == difficulty:
@@ -60,17 +70,27 @@ class LocalKnowledgeBank:
                 is_match = any(t.lower() in topic.lower() for t in q.topic_tags) or topic.lower() in " ".join(q.topic_tags).lower()
                 if is_match and q.difficulty == difficulty:
                     candidates.append(q)
-                    
+
         # If no strict match found, relax constraints
         if not candidates:
             for q in self._questions:
                 if q.question_text not in seen_questions:
                     candidates.append(q)
-                    
+
         if not candidates:
-            return None # Out of questions
-            
-        return random.choice(candidates)
+            return None  # Out of questions
+
+        # --- Weighted sampling ---
+        if history is not None:
+            weights = get_weights_for_candidates(candidates, history)
+            # If all weights are 0 (everything in hard cooldown), fall back to uniform
+            if sum(weights) == 0:
+                weights = [1.0] * len(candidates)
+            return random.choices(candidates, weights=weights, k=1)[0]
+        else:
+            # No history provided — uniform fallback (used in tests / first run)
+            return random.choice(candidates)
 
 # Global Instance
 active_bank = LocalKnowledgeBank()
+

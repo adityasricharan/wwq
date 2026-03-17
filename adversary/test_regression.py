@@ -128,3 +128,72 @@ class TestGameState:
         config = QuizConfig()
         assert config.llm_provider == "local_bank"
         assert config.llm_model == "questions.enc"
+
+# ─── Question History & Weighted Sampling Tests ────────────────────────────────
+
+from question_history import (
+    fingerprint, load_history, save_history,
+    start_new_session, record_asked, compute_weight, get_weights_for_candidates,
+    HARD_COOLDOWN_SESSIONS, WEIGHT_FLOOR
+)
+
+class TestQuestionHistory:
+    def test_fingerprint_is_deterministic(self):
+        """Same question text must always produce the same fingerprint."""
+        text = "Which country invaded Poland in September 1939?"
+        assert fingerprint(text) == fingerprint(text)
+        assert fingerprint(text) == fingerprint(text + "   ")  # trailing space trimmed
+
+    def test_fingerprint_is_unique(self):
+        """Different question texts must produce different fingerprints."""
+        a = fingerprint("Question A about WW1")
+        b = fingerprint("Question B about WW2")
+        assert a != b
+
+    def test_fresh_question_gets_max_weight(self):
+        """A question never asked should get weight 1.0."""
+        w = compute_weight(entry=None, total_sessions=10)
+        assert w == 1.0
+
+    def test_hard_cooldown_gives_zero_weight(self):
+        """A question asked this session or last session must get weight 0.0."""
+        for sessions_ago in range(1, HARD_COOLDOWN_SESSIONS + 1):
+            entry = {"global_count": 1, "last_asked_session": 10 - sessions_ago + 1, "session_history": []}
+            w = compute_weight(entry, total_sessions=10)
+            assert w == 0.0, f"Expected 0.0 for sessions_ago={sessions_ago}, got {w}"
+
+    def test_weight_recovers_after_cooldown(self):
+        """Weight must be > 0 once outside the hard cooldown window."""
+        entry = {"global_count": 1, "last_asked_session": 5, "session_history": []}
+        w = compute_weight(entry, total_sessions=10)  # 5 sessions ago
+        assert w > 0.0
+
+    def test_global_frequency_lowers_weight(self):
+        """More frequently asked questions must have lower weight."""
+        entry_fresh = {"global_count": 0, "last_asked_session": 0, "session_history": []}
+        entry_used  = {"global_count": 15, "last_asked_session": 0, "session_history": []}
+        w_fresh = compute_weight(entry_fresh, total_sessions=10)
+        w_used  = compute_weight(entry_used,  total_sessions=10)
+        assert w_fresh > w_used, "Frequently asked question must have lower weight"
+
+    def test_weight_floor_respected(self):
+        """Weight must never go below WEIGHT_FLOOR (even for very overused questions)."""
+        entry = {"global_count": 9999, "last_asked_session": 0, "session_history": []}
+        w = compute_weight(entry, total_sessions=10)
+        assert w >= WEIGHT_FLOOR
+
+    def test_all_zero_weights_fallback(self):
+        """If all candidate weights are 0, database must not crash (fallback to uniform)."""
+        history = {"version": 1, "total_sessions": 1, "entries": {}}
+        from database import LocalKnowledgeBank
+        bank = LocalKnowledgeBank()
+        if not bank._questions:
+            pytest.skip("questions.enc not available")
+        # Force all candidates into hard cooldown by marking them asked this session
+        for q in bank._questions[:20]:
+            record_asked(history, q.question_text)
+        # get_question should still return something without crashing
+        q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set(), history=history)
+        # May be None if truly exhausted, but must not raise
+        assert q is None or hasattr(q, "question_text")
+

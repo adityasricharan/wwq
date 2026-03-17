@@ -16,8 +16,13 @@ class ValidationResult(BaseModel):
 
 from typing import Optional
 
-def generate_question(provider: str, model: str, topic: str, format_instructions: str, difficulty: int, random_seed: int, seen_questions: Optional[set] = None) -> Question:
-    """Calls the Historian agent to generate a question."""
+def generate_question(provider: str, model: str, topic: str, format_instructions: str, difficulty: int, random_seed: int, seen_questions: Optional[set] = None, history: Optional[dict] = None) -> Question:
+    """Calls the Historian agent to generate a question.
+    
+    Args:
+        history: Global question frequency history from question_history.py.
+                 Used to weight the probability of local_bank questions.
+    """
     prompt = f"""
     You are 'The Historian', an expert in WW1 and WW2 history.
     Your task is to generate a trivia question with exactly 4 options and 1 correct answer.
@@ -32,11 +37,12 @@ def generate_question(provider: str, model: str, topic: str, format_instructions
     
     if provider == "local_bank":
         from database import active_bank
-        # Attempt to pull a question from our curated local bank
-        q = active_bank.get_question(difficulty=difficulty, random_seed=random_seed, topic=topic, seen_questions=seen_questions)
+        # Attempt to pull a question from our curated local bank, with history-weighted sampling
+        q = active_bank.get_question(difficulty=difficulty, random_seed=random_seed, topic=topic, seen_questions=seen_questions, history=history)
         if q: return q
         # If we failed to find one, raise error fallback
         raise Exception("Local knowledge bank exhausted or missing.")
+
     
     if provider == "ollama":
         response = ollama.chat(
