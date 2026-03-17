@@ -21,22 +21,39 @@ class GameState(BaseModel):
     question_history: list[dict] = []
     seen_questions: set[str] = set()
 
-import base64
-import json
+import hashlib
+
+DEFAULT_TOPIC = "General WW1 and WW2 History"
 
 def generate_seed(topic: str) -> str:
-    """Generates a base64 encoded hashcode containing the random seed and the quiz config."""
+    """Generates a short, human-readable seed code.
+    Format: 'XXXXXX' for a default topic, or 'XXXXXX:Topic' for a custom topic.
+    The 6-character code is uppercase alphanumeric and easy to share verbally.
+    """
     seed = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-    data = {"s": seed, "t": topic}
-    json_str = json.dumps(data)
-    return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+    if topic and topic != DEFAULT_TOPIC:
+        return f"{seed}:{topic}"
+    return seed
 
 def decode_seed(seed_hash: str) -> tuple[str, str]:
-    """Decodes the hashcode into the random seed and the topic."""
-    try:
-        json_str = base64.b64decode(seed_hash.encode('utf-8')).decode('utf-8')
-        data = json.loads(json_str)
-        return data.get("s", "AAAAAA"), data.get("t", "General WW1 and WW2 History")
-    except Exception:
-        # Fallback if the user just typed a random string instead of a hashcode
-        return seed_hash, "General WW1 and WW2 History"
+    """Decodes the short seed code back into (seed, topic).
+
+    Handles both new short format ('A3F2C1' or 'A3F2C1:Topic') and
+    the old long base64 format for backward compatibility.
+    """
+    # Check if it's likely old base64 format (long string, no valid 6-char prefix structure)
+    if len(seed_hash) > 12 and ':' not in seed_hash:
+        try:
+            import base64, json
+            json_str = base64.b64decode(seed_hash.encode('utf-8')).decode('utf-8')
+            data = json.loads(json_str)
+            return data.get("s", "AAAAAA"), data.get("t", DEFAULT_TOPIC)
+        except Exception:
+            pass  # Fall through to short-format parsing
+
+    # New short format
+    if ':' in seed_hash:
+        parts = seed_hash.split(':', 1)
+        return parts[0].upper(), parts[1]
+    else:
+        return seed_hash.upper(), DEFAULT_TOPIC

@@ -98,7 +98,7 @@ def setup_game() -> GameState:
         seed_hash = generate_seed(topic)
         seed, _ = decode_seed(seed_hash)
         config = QuizConfig(topic=topic)
-        console.print(f"\n[bold green]Game Seed (Share this with friends):[/bold green] {seed_hash}")
+        console.print(f"\n[bold green]Game Seed (Share this short code with friends!):[/bold green] [bold white]{seed_hash}[/bold white]")
         
     random.seed(seed)
     
@@ -314,7 +314,12 @@ def main():
             break
             
     display_review(state)
-    console.print(f"Game Seed: {state.seed}")
+    console.print(f"\n[bold cyan]Game Seed: {state.seed}[/bold cyan]")
+    if ":" in state.seed:
+        short, topic = state.seed.split(":", 1)
+        console.print(f"[dim]Share the code [bold]{short}[/bold] + the topic '[italic]{topic}[/italic]' with friends to replay this exact quiz![/dim]")
+    else:
+        console.print(f"[dim]Share the code [bold]{state.seed}[/bold] with friends to replay this exact quiz![/dim]")
     console.print("[green]Thanks for playing![/green]")
 
 if __name__ == "__main__":
