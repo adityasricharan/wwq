@@ -1,0 +1,11 @@
+{
+  "banks": [
+    {
+      "id": "official",
+      "name": "Official WW1 & WW2 Bank",
+      "path": "questions.enc",
+      "is_official": true
+    }
+  ],
+  "active_bank_id": "official"
+}

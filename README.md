@@ -6,8 +6,10 @@ This game utilizes a massive local encrypted knowledge bank consisting of **2,04
 
 ## Features
 
+- **Two Dynamic Game Modes:** Play defensively in **Adaptive Mode**, where questions get harder as you answer correctly, or play deterministically with fixed difficulty in **VS Mode**!
 - **Massive Offline Bank:** 2,046 factual, unique questions encrypted via Fernet cryptography. No API key required by default!
-- **Dynamic Scoring Penalties:** Questions are graded on a strict 1-5 difficulty curve. Miss a Level 5 (Insane) question and you lose 1 point. Miss a Level 1 (Easy) question and you lose 5 points.
+- **Custom Question Banks:** Generate your own offline, encrypted question banks around any specific topic (`banks/<slug>.enc`) and swap them via settings.
+- **Dynamic Scoring Penalties:** Questions are graded on a strict 1-5 difficulty curve. Miss a Level 5 (Insane) question and you lose 1.25 points. Miss a Level 1 (Easy) question and you lose 5 points.
 - **End-Game Review Matrix:** A beautiful `Rich.Table` printout at the end of every game breaking down exactly what you missed, the correct answers, and your resulting 1-10 absolute "Historical Knowledge Scale".
 - **Zero Repetition Engine:** A deterministic `seen_questions` algorithm ensures you will *never* see the same question twice in a single sitting.
 - **Over-The-Air (OTA) Updates:** The game automatically pings GitHub for centralized question-bank updates every time it boots.
@@ -36,31 +38,22 @@ chmod +x wwq.sh
 ## How to Play
 
 ### 1. The Main Menu
-When the game boots, you will be greeted by the Start Menu. You can immediately press **Enter** to dive into a randomly seeded 20-question quiz.
+When the game boots, you will be greeted by the Start Menu. You can immediately press **Enter** to dive into a quiz, where you can configure the Game Mode and Question Length.
 
-```text
-================================================================================
-                           WW1 & WW2 TRIVIA CLI                                 
-================================================================================
-[INFO] Offline encrypted bank loaded successfully.
+### 2. Game Modes
+The CLI now offers two distinct game modes:
 
-Commands:
-  (Press Enter) to start a new game with a random seed.
-  (Type a 6-character Hash) to play a specific deterministic game.
-  's' for Settings
-  'exit' to quit
+#### 🕹️ Adaptive Mode (Single Player)
+- **Concept:** The game intelligently adjusts difficulty based on your performance. Get questions right, and the game throws harder questions at you. Get them wrong, and it scales back to easier questions.
+- **Mechanics:** Questions are drawn dynamically, checking your global history file to ensure less-frequently-seen questions are prioritized.
+- **Seeds Hidden:** In this mode, no seeds are shared or required.
 
-Enter command: 
-```
+#### ⚔️ VS Mode (Multiplayer/Deterministic)
+- **Concept:** A truly deterministic mode for competing with friends! Provide a shared random hash or let the game generate one. 
+- **Mechanics:** The difficulty remains totally flat. All questions are drawn completely upfront at runtime based *strictly* on the shared seed and the total question count. 
+- **Seeds Required:** Every VS mode game has a prefixed seed like `VS:7S38D6`. By sharing this short alphanumeric key, your friend will face the **exact same questions in the exact same order** allowing for pure competitive high-score chasing.
 
-### 2. Gameplay & Sharing Seeds
-Once a game starts, you'll be given a "Game Seed" (e.g., `7S38D6`). You can share this seed hash with anyone else running the game. If they enter that seed at the start menu, they will receive the exact same generated questions, allowing you to easily compete for the highest score!
-
-```text
---- Game Started! ---
-Your unique game seed is: 7S38D6
----------------------
-```
+---
 
 ### 3. The Settings Menu
 If you want to configure your play experience, type `s` at the Main Menu.
@@ -76,8 +69,13 @@ Do you want to change the LLM provider? (local_bank, gemini, ollama, openai) [lo
 
 From here, you can switch from the `local_bank` to `gemini` or `ollama`. If you choose an external API, the game will seamlessly prompt you for an API Key or local Model name, enabling you to dynamically generate infinite unique trivia!
 
+#### 🏦 Select Active Bank
+If you have created custom banks (see below), they will be listed in an internal `banks/index.json` registry. Under the settings menu, you can navigate to **Manage Question Bank** -> **Select Active Bank** to swap out the official WW1/WW2 bank for any custom bank of your creation.
+
+---
+
 ### 4. End-Game Review
-The game automatically caps at a perfect **20 Questions**. You can also type `exit` at any prompt to securely leave the game. Once completed, the engine calculates your score and prints the Review Matrix:
+The game length is configurable at start, with a default of **20 Questions**. You can also type `exit` at any prompt to securely leave the game. Once completed, the engine calculates your score and prints the Review Matrix:
 
 ```text
                               End of Game Review                              
@@ -120,30 +118,31 @@ Seeds now include the bank version: `A3F2C1@v2`
 
 ### Creating a Custom Question Bank
 
-Build your own themed bank with any model and topics:
+Build your own themed bank with any model and topics and save it directly to the `banks/` registry:
 
 ```bash
 python seed_bank.py                                     # Interactive wizard
-python seed_bank.py --count 500 --topics "Cold War, Korean War"
-python seed_bank.py --count 200 --model openai/gpt-4o  # Use any LiteLLM model
+python seed_bank.py --name cold_war --count 500 --topics "Cold War, Korean War"
+python seed_bank.py --name custom_gpt --count 200 --model openai/gpt-4o  
 ```
 
-- The official bank is automatically backed up to `questions.enc.official` the **first time** you run this
-- If generation fails (bad API key, rate limit, etc.), your bank is **never overwritten**
-- To share your custom bank with friends: copy `questions.enc` to their game folder
+- Custom banks are saved as `banks/<name>.enc` alongside an updated `banks/index.json`. 
+- The minimum viable question count to generate a custom bank is **20**.
+- If generation fails (bad API key, rate limit, etc.), partial runs are saved safely to `banks/questions_custom_raw.json` so you can resume later.
 
-### Restoring the Official Bank
+### Managing and Switching Banks
 
-In-game: **Settings → Manage Bank → Restore Official Bank**
+All banks (including the Official Bank) are tracked in `banks/index.json`.
 
-Or manually:
-```bash
-# From local backup (instant):
-copy questions.enc.official questions.enc
+In-game: **Settings → Manage Bank → Select Active Bank**
+This will bring up a table of all available banks. Selecting one will immediately set it as the active bank for all future games.
 
-# Re-download from GitHub:
-curl -L -o questions.enc https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc
-```
+Want to share a bank with a friend? 
+1. Just send them your `banks/<name>.enc` file.
+2. They can place it in their `banks/` folder.
+3. Simply running `seed_bank.py` or editing `index.json` manually will register it!
+
+To restore the official bank, simply select **Official WW1 & WW2 Bank** from the active bank menu. The official `questions.enc` is never overwritten securely updated via OTA on boot.
 
 ---
 

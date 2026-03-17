@@ -50,6 +50,7 @@ class LocalKnowledgeBank:
             print(f"[ERROR] Failed to decrypt local knowledge bank: {e}")
 
 
+
     def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None, history: dict = None) -> Question:
         """Finds a matching question using difficulty, topic, and inverse-frequency weighted sampling.
 
@@ -103,6 +104,53 @@ class LocalKnowledgeBank:
             # No history provided — uniform fallback (used in tests / first run)
             return random.choice(candidates)
 
-# Global Instance
-active_bank = LocalKnowledgeBank()
+# --- Multi-Bank Management ---
+BANKS_DIR = "banks"
+INDEX_PATH = os.path.join(BANKS_DIR, "index.json")
 
+def _ensure_banks_index():
+    if not os.path.exists(BANKS_DIR):
+        os.makedirs(BANKS_DIR)
+    
+    if not os.path.exists(INDEX_PATH):
+        # Create default index pointing to the official root bank
+        default_index = {
+            "banks": [
+                {
+                    "id": "official",
+                    "name": "Official WW1 & WW2 Bank",
+                    "path": "questions.enc",
+                    "is_official": True
+                }
+            ],
+            "active_bank_id": "official"
+        }
+        with open(INDEX_PATH, "w") as f:
+            json.dump(default_index, f, indent=2)
+
+def list_available_banks() -> list[dict]:
+    """Returns a list of all registered question banks."""
+    _ensure_banks_index()
+    try:
+        with open(INDEX_PATH, "r") as f:
+            data = json.load(f)
+            return data.get("banks", [])
+    except Exception:
+        return []
+
+def get_active_bank_info() -> dict:
+    _ensure_banks_index()
+    try:
+        with open(INDEX_PATH, "r") as f:
+            data = json.load(f)
+            active_id = data.get("active_bank_id", "official")
+            for b in data.get("banks", []):
+                if b["id"] == active_id:
+                    return b
+    except Exception:
+        pass
+    
+    return {"id": "official", "name": "Official WW1 & WW2 Bank", "path": "questions.enc"}
+
+active_bank_info = get_active_bank_info()
+active_bank = LocalKnowledgeBank(db_path=active_bank_info["path"])

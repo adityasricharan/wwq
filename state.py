@@ -20,23 +20,27 @@ class GameState(BaseModel):
     override_difficulty: Optional[int] = None
     question_history: list[dict] = []
     seen_questions: set[str] = set()
+    game_mode: str = "adaptive"       # "adaptive" | "vs"
+    total_questions: int = 20         # Configurable at game start
+    vs_question_list: list[str] = []  # Pre-drawn list for vs mode
+
 
 import hashlib
 
 DEFAULT_TOPIC = "General WW1 and WW2 History"
 
 def generate_seed(topic: str, bank_version: int = 0) -> str:
-    """Generates a short, human-readable seed code.
+    """Generates a short, human-readable seed code for VS Mode.
     Format:
-      'XXXXXX@vN'          — default topic
-      'XXXXXX:Topic@vN'    — custom topic
+      'VS:XXXXXX@vN'          — default topic
+      'VS:XXXXXX:Topic@vN'    — custom topic
     The 6-character code is uppercase alphanumeric and easy to share verbally.
     bank_version=0 means unversioned (omits @v suffix).
     """
     seed = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     topic_part = f":{topic}" if topic and topic != DEFAULT_TOPIC else ""
     version_part = f"@v{bank_version}" if bank_version > 0 else ""
-    return f"{seed}{topic_part}{version_part}"
+    return f"VS:{seed}{topic_part}{version_part}"
 
 def decode_seed(seed_hash: str) -> tuple[str, str, int | None]:
     """Decodes a seed string into (seed, topic, bank_version).
@@ -65,6 +69,10 @@ def decode_seed(seed_hash: str) -> tuple[str, str, int | None]:
             bank_version = int(version_str)
         except ValueError:
             bank_version = None
+
+    # Extract VS prefix if present (it should be for new seeds)
+    if seed_hash.upper().startswith("VS:"):
+        seed_hash = seed_hash[3:]
 
     # Parse topic suffix
     if ':' in seed_hash:

@@ -20,17 +20,20 @@ from state import generate_seed, decode_seed, DEFAULT_TOPIC
 
 class TestSeedEncoding:
     def test_short_seed_default_topic(self):
-        """Default topic should produce a clean 6-char code with no ':' suffix."""
+        """Default topic should produce a clean code with no topic suffix, but starting with VS:."""
         seed = generate_seed(DEFAULT_TOPIC)
-        assert ":" not in seed, "Default topic must NOT append ':' suffix"
-        assert len(seed) == 6, f"Seed should be exactly 6 chars, got {len(seed)}"
-        assert seed.isupper() or seed.isalnum(), "Seed should be alphanumeric uppercase"
+        # Check that it starts with VS: but has no further colons
+        assert seed.startswith("VS:"), "Seed must start with VS:"
+        assert seed.count(":") == 1, "Default topic must NOT append an extra ':' suffix"
+        assert len(seed) == 9, f"Seed should be exactly 9 chars 'VS:XXXXXX', got {len(seed)}"
 
     def test_short_seed_custom_topic(self):
-        """Custom topic should produce a 'XXXXXX:Topic' format."""
+        """Custom topic should produce a 'VS:XXXXXX:Topic' format."""
         seed = generate_seed("Spies")
-        assert ":" in seed, "Custom topic seed must contain ':' separator"
-        parts = seed.split(":", 1)
+        assert seed.startswith("VS:"), "Custom topic seed must start with VS:"
+        assert seed.count(":") == 2, "Custom topic seed must contain two ':' separators"
+        # Split on the second colon to get the topic
+        parts = seed[3:].split(":", 1)
         assert len(parts[0]) == 6, "Seed prefix must be 6 characters"
         assert parts[1] == "Spies", "Topic suffix must match exactly"
 
@@ -205,4 +208,51 @@ class TestQuestionHistory:
         q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set(), history=history)
         # May be None if truly exhausted, but must not raise
         assert q is None or hasattr(q, "question_text")
+
+# ─── V2.5 Game Modes & Multi-Bank Tests ────────────────────────────────────────
+
+class TestGameModes:
+    def test_game_mode_fields_exist(self):
+        """GameState must support new fields for Game Modes."""
+        state = GameState(seed="ABC123", config=QuizConfig())
+        assert hasattr(state, "game_mode")
+        assert state.game_mode == "adaptive"
+        assert hasattr(state, "total_questions")
+        assert state.total_questions == 20
+        assert hasattr(state, "vs_question_list")
+        assert isinstance(state.vs_question_list, list)
+
+    def test_vs_mode_determinism(self):
+        """draw_vs_questions must return identical lists for the same seed, and different lists for different seeds."""
+        from database import LocalKnowledgeBank
+        from main import draw_vs_questions
+        
+        bank = LocalKnowledgeBank()
+        if not bank._questions:
+            pytest.skip("Offline bank missing")
+            
+        seed_1 = "VS:A1B2C3@v2"
+        seed_2 = "VS:Z9Y8X7@v2"
+        
+        # Test exact determinism
+        list_a = draw_vs_questions(bank, seed_1, 10)
+        list_b = draw_vs_questions(bank, seed_1, 10)
+        assert list_a == list_b, "Identical seeds must produce identical question lists"
+        assert len(list_a) == 10, "List length must match requested count"
+        
+        # Test divergence
+        list_c = draw_vs_questions(bank, seed_2, 10)
+        assert list_a != list_c, "Different seeds must produce different question lists"
+
+class TestMultiBank:
+    def test_bank_index_official_always_present(self):
+        """The banks/index.json file must always contain the official bank entry."""
+        from database import list_available_banks, BANKS_DIR
+        
+        if not os.path.exists(BANKS_DIR):
+            pytest.skip("banks/ directory not yet created")
+            
+        banks = list_available_banks()
+        assert any(b["id"] == "official" for b in banks), "Official bank must be in the index"
+        assert any(b.get("is_official", False) for b in banks), "An official bank flag must be true"
 

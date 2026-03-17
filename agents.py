@@ -1,7 +1,10 @@
 import os
 import json
 from pydantic import BaseModel, Field
-import litellm
+try:
+    import litellm
+except ImportError:
+    litellm = None
 import ollama
 
 class Question(BaseModel):

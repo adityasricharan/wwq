@@ -1,15 +1,25 @@
 import os
 import sys
+import json
 import random
+import hashlib
 import ollama
 from dotenv import load_dotenv, set_key
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
-from state import GameState, QuizConfig, generate_seed, decode_seed
+from state import GameState, QuizConfig, generate_seed, decode_seed, DEFAULT_TOPIC
 from agents import generate_question, validate_question
 import question_history as qh
+from question_history import get_weights_for_candidates
+
+try:
+    from litellm.types.utils import ModelResponse
+except ImportError:
+    ModelResponse = type('ModelResponse', (object,), {})
+
+from database import active_bank, get_active_bank_info
 
 load_dotenv()
 console = Console()
@@ -19,53 +29,73 @@ def print_header():
 
 def bank_management_menu():
     """Settings sub-menu for managing the question bank."""
-    from database import active_bank
+    from database import active_bank, get_active_bank_info, INDEX_PATH, BANKS_DIR
     import shutil, urllib.request
 
     OFFICIAL_BACKUP = "questions.enc.official"
     DB_PATH = "questions.enc"
     OTA_URL = "https://raw.githubusercontent.com/adityasricharan/wwq/master/questions.enc"
 
-    bank_label = "[yellow]Custom[/yellow]" if os.path.exists(OFFICIAL_BACKUP) else "[green]Official[/green]"
-    bv = active_bank.bank_version
-    qcount = len(active_bank._questions)
-
     while True:
+        info = get_active_bank_info()
+        bank_label = f"[green]{info['name']}[/green]" if info.get("is_official") else f"[yellow]{info['name']}[/yellow]"
+        bv = active_bank.bank_version
+        qcount = len(active_bank._questions)
+
         console.print(f"\n[bold yellow]--- Bank Management ---[/bold yellow]")
         console.print(f"  Active: {bank_label}  |  Bank v{bv}  |  {qcount} questions")
-        console.print("1. Restore Official Bank (from local backup)")
-        console.print("2. Re-download Official Bank from GitHub")
-        console.print("3. View Bank Statistics")
-        console.print("4. Back")
+        console.print("1. Select Active Bank")
+        console.print("2. Restore Official Bank (from local backup)")
+        console.print("3. Re-download Official Bank from GitHub")
+        console.print("4. View Bank Statistics")
+        console.print("5. Back")
 
-        sub = Prompt.ask("Select", choices=["1", "2", "3", "4"])
+        sub = Prompt.ask("Select", choices=["1", "2", "3", "4", "5"])
 
         if sub == "1":
-            if not os.path.exists(OFFICIAL_BACKUP):
-                console.print("[yellow]No local backup found (questions.enc.official). Use option 2 to re-download.[/yellow]")
-            else:
-                shutil.copy2(OFFICIAL_BACKUP, DB_PATH)
-                console.print("[green]✅ Official bank restored from local backup. Relaunch the game to apply.[/green]")
-                if os.path.exists(OFFICIAL_BACKUP):
-                    os.remove(OFFICIAL_BACKUP)
-                    console.print("[dim]Backup file removed (you are now on the official bank).[/dim]")
+            try:
+                with open(INDEX_PATH, "r") as f:
+                    index_data = json.load(f)
+                banks = index_data.get("banks", [])
+                
+                console.print("\n[bold cyan]Available Banks:[/bold cyan]")
+                for i, b in enumerate(banks):
+                    active_marker = " * " if b["id"] == info["id"] else "   "
+                    color = "green" if b.get("is_official") else "yellow"
+                    console.print(f"{active_marker}{i+1}. [{color}]{b['name']}[/{color}] ({b.get('path', '')})")
+                
+                choice_str = Prompt.ask("\nEnter number to select (or press Enter to cancel)", default="")
+                if choice_str.isdigit():
+                    idx = int(choice_str) - 1
+                    if 0 <= idx < len(banks):
+                        selected = banks[idx]
+                        index_data["active_bank_id"] = selected["id"]
+                        with open(INDEX_PATH, "w") as f:
+                            json.dump(index_data, f, indent=2)
+                        console.print(f"[green]✅ Switched active bank to: {selected['name']}. Relaunch the game to apply.[/green]")
+                        # We don't hot-reload here because GameState depends on active_bank.
+            except Exception as e:
+                console.print(f"[red]Error loading bank index: {e}[/red]")
 
         elif sub == "2":
+            if not os.path.exists(OFFICIAL_BACKUP):
+                console.print("[yellow]No local backup found (questions.enc.official). Use option 3 to re-download.[/yellow]")
+            else:
+                shutil.copy2(OFFICIAL_BACKUP, DB_PATH)
+                console.print("[green]✅ Official bank restored to questions.enc. Make sure it's selected as Active.[/green]")
+                console.print("[dim]Backup file kept.[/dim]")
+
+        elif sub == "3":
             console.print("[cyan]Downloading official bank from GitHub...[/cyan]")
             try:
                 tmp = DB_PATH + ".ota.tmp"
                 urllib.request.urlretrieve(OTA_URL, tmp)
-                # If user has a custom bank, update the official backup
-                if os.path.exists(OFFICIAL_BACKUP):
-                    shutil.move(tmp, OFFICIAL_BACKUP)
-                    console.print("[green]✅ Official backup updated from GitHub. Your custom bank is unchanged.[/green]")
-                else:
-                    shutil.move(tmp, DB_PATH)
-                    console.print("[green]✅ Official bank re-downloaded. Relaunch to apply.[/green]")
+                shutil.move(tmp, DB_PATH)
+                console.print("[green]✅ Official bank re-downloaded to questions.enc.[/green]")
             except Exception as e:
                 console.print(f"[red]Download failed: {e}[/red]")
 
-        elif sub == "3":
+        elif sub == "4":
             from collections import Counter
             diff_counts = Counter(q.difficulty for q in active_bank._questions)
             console.print("\n[bold]Bank Statistics[/bold]")
@@ -76,7 +106,7 @@ def bank_management_menu():
             console.print(f"  Sessions tracked: {h.get('total_sessions', 0)}")
             console.print(f"  Questions in history: {len(h.get('entries', {}))}")
 
-        elif sub == "4":
+        elif sub == "5":
             break
 
 
@@ -150,33 +180,88 @@ def settings_menu(state: GameState):
         elif choice == "6":
             break
 
+def draw_vs_questions(bank, seed_str: str, count: int) -> list[str]:
+    """Deterministically draws `count` question texts using the given seed.
+    Uses an isolated RNG so external random calls don't break determinism.
+    """
+    # Convert string seed to integer for random.Random
+    seed_int = int(hashlib.sha256(seed_str.encode('utf-8')).hexdigest()[:8], 16)
+    rng = random.Random(seed_int)
+    
+    candidates = bank._questions[:]
+    rng.shuffle(candidates)
+    
+    # If asked for more than exists, cap it seamlessly
+    return [q.question_text for q in candidates[:count]]
+
+
 def setup_game() -> GameState:
     print_header()
     from database import active_bank
+    import hashlib
 
-    use_custom_seed = Confirm.ask("Do you have a deterministic hashcode/seed you want to play with?", default=False)
-    if use_custom_seed:
-        seed_hash = Prompt.ask("Enter seed")
-        seed, topic, seed_bank_version = decode_seed(seed_hash)
-        config = QuizConfig(topic=topic)
-        console.print(f"\n[bold green]Loaded Game Seed:[/bold green] {seed_hash}")
-        console.print(f"[bold green]Topic:[/bold green] {topic}")
-        # Warn if bank versions differ
-        if seed_bank_version is not None and active_bank.bank_version != seed_bank_version:
-            console.print(f"\n[yellow]⚠️  Bank version mismatch: seed was created on Bank v{seed_bank_version}, "
-                          f"but your bank is v{active_bank.bank_version}.[/yellow]")
-            console.print("[dim]   Questions may differ from the original session. "
-                          "Run ./wwq to check for bank updates.[/dim]")
-    else:
-        topic = Prompt.ask("Any specific topic or focus? (e.g., 'Spies', 'Weapons', 'Naval Battles') [Leave blank for General]", default="General WW1 and WW2 History")
+    # 1. Mode Selection
+    console.print("\n[bold cyan]Select Game Mode:[/bold cyan]")
+    console.print("1. [bold]Adaptive Mode[/bold] (Default, difficulty scales dynamically)")
+    console.print("2. [bold]VS Mode[/bold]       (Deterministic fixed questions — share seed to compete)")
+    
+    mode_choice = Prompt.ask("Mode", choices=["1", "2"], default="1")
+    game_mode = "adaptive" if mode_choice == "1" else "vs"
+
+    # 2. Quiz Length
+    q_count_str = Prompt.ask("\nHow many questions?", default="20")
+    try:
+        total_questions = int(q_count_str)
+        total_questions = max(5, min(total_questions, len(active_bank._questions)))
+    except ValueError:
+        total_questions = 20
+
+    config = QuizConfig()
+    seed_hash = ""
+    vs_question_list = []
+
+    # 3. Mode-Specific Setup
+    if game_mode == "adaptive":
+        topic = Prompt.ask("\nTopic focus? (e.g., 'Spies', 'Naval Battles') [Leave blank for General]", default=DEFAULT_TOPIC)
+        config.topic = topic
+        # Generate an internal hidden seed solely for reproducibility of the adaptive path
         seed_hash = generate_seed(topic, bank_version=active_bank.bank_version)
-        seed, _, _ = decode_seed(seed_hash)
-        config = QuizConfig(topic=topic)
-        console.print(f"\n[bold green]Game Seed (Share this short code with friends!):[/bold green] [bold white]{seed_hash}[/bold white]")
+        console.print(f"\n[green]Starting Adaptive Quiz[/green] ({total_questions} questions)")
 
-    random.seed(seed)
+    else:
+        # VS MODE
+        use_existing = Confirm.ask("\nDo you have a seed code to join a VS match?", default=False)
+        if use_existing:
+            seed_hash = Prompt.ask("Enter VS seed")
+            # If user forgot the VS: prefix, we'll let decode_seed handle or reject it
+            if not seed_hash.upper().startswith("VS:"):
+                seed_hash = "VS:" + seed_hash
 
-    state = GameState(seed=seed_hash, config=config)
+            _, topic, seed_bank_version = decode_seed(seed_hash)
+            config.topic = topic
+            console.print(f"\n[bold green]Loaded VS Seed:[/bold green] {seed_hash}")
+            console.print(f"[bold green]Topic:[/bold green] {topic}")
+            
+            if seed_bank_version is not None and active_bank.bank_version != seed_bank_version:
+                console.print(f"\n[yellow]⚠️  Bank version mismatch: seed was created on Bank v{seed_bank_version}, "
+                              f"but your bank is v{active_bank.bank_version}.[/yellow]")
+                console.print("[dim]   Questions may differ from the original match. Run ./wwq to sync.[/dim]")
+        else:
+            topic = Prompt.ask("\nTopic focus? [Leave blank for General]", default=DEFAULT_TOPIC)
+            config.topic = topic
+            seed_hash = generate_seed(topic, bank_version=active_bank.bank_version)
+            console.print(f"\n[bold green]🆚 VS MODE SEED (Share to challenge friends!):[/bold green] [bold white]{seed_hash}[/bold white]")
+
+        # Draw the deterministic question list upfront
+        vs_question_list = draw_vs_questions(active_bank, seed_hash, total_questions)
+
+    state = GameState(
+        seed=seed_hash, 
+        config=config,
+        game_mode=game_mode,
+        total_questions=total_questions,
+        vs_question_list=vs_question_list
+    )
 
     if not os.environ.get("GOOGLE_API_KEY") and state.config.llm_provider == "gemini":
         console.print("\n[yellow]Google Gemini requires an API key.[/yellow]")
@@ -191,14 +276,35 @@ def play_round(state: GameState, history: dict):
     diff_to_use = state.override_difficulty if state.override_difficulty is not None else state.current_difficulty
     console.print(f"\n[bold blue]--- Question {state.questions_answered + 1} (Difficulty: {diff_to_use}) ---[/bold blue]")
     
-    api_error_count = 0
-    with console.status(f"[bold cyan]The Historian ({state.config.llm_model}) is researching a question...[/bold cyan]") as status:
-        model_seed = random.randint(1, 100000)
+    question = None
+    
+    # In VS Mode, we already have the exact questions lined up deterministically.
+    if state.game_mode == "vs":
+        from database import active_bank
+        q_text = state.vs_question_list[state.questions_answered]
         
-        valid = False
-        attempts = 0
-        question = None
-        
+        # We need the full Question object from the bank
+        for bank_q in active_bank._questions:
+            if bank_q.question_text == q_text:
+                question = bank_q
+                break
+                
+        if not question:
+            console.print("[red]Critical Error: VS Mode question not found in active bank.[/red]")
+            sys.exit(1)
+            
+        with console.status("[bold cyan]Loading next VS Match question...[/bold cyan]") as status:
+            import time; time.sleep(0.5) # Slight UX pause
+            
+    else:
+        # Adaptive Mode - use LLM agent and difficulty scaling
+        api_error_count = 0
+        with console.status(f"[bold cyan]The Historian ({state.config.llm_model}) is researching a question...[/bold cyan]") as status:
+            model_seed = random.randint(1, 100000)
+            
+            valid = False
+            attempts = 0
+            
         while not valid and attempts < 3:
             try:
                 question = generate_question(state.config.llm_provider, state.config.llm_model, state.config.topic, state.config.format, diff_to_use, model_seed, state.seen_questions, history=history)
@@ -352,8 +458,10 @@ def display_review(state: GameState):
     
     # 1-10 Knowledge Scale
     # If they get everything perfectly, score aligns closely with max possible.
+    # 1-10 Knowledge Scale
+    # If they get everything perfectly, score aligns closely with max possible.
     if total_max_possible > 0:
-        ratio = max(0, total_earned / total_max_possible)
+        ratio = max(0.0, float(total_earned) / float(total_max_possible))
         scale = min(10, max(1, round(ratio * 10)))
     else:
         scale = 1
@@ -369,8 +477,8 @@ def main():
     state = setup_game()
 
     while True:
-        if state.questions_answered >= 20:
-            console.print("\n[bold yellow]You have reached the maximum length of 20 questions for this session![/bold yellow]")
+        if state.questions_answered >= state.total_questions:
+            console.print(f"\n[bold yellow]Quiz complete! You answered all {state.total_questions} questions.[/bold yellow]")
             break
 
         play_round(state, history)
@@ -390,13 +498,12 @@ def main():
 
     display_review(state)
     qh.save_history(history)
-    console.print(f"\n[bold cyan]Game Seed: {state.seed}[/bold cyan]")
-    if ":" in state.seed:
-        short, topic = state.seed.split(":", 1)
-        console.print(f"[dim]Share the code [bold]{short}[/bold] + the topic '[italic]{topic}[/italic]' with friends to replay this exact quiz![/dim]")
-    else:
-        console.print(f"[dim]Share the code [bold]{state.seed}[/bold] with friends to replay this exact quiz![/dim]")
-    console.print("[green]Thanks for playing![/green]")
+    
+    if state.game_mode == "vs":
+        console.print(f"\n[bold cyan]VS Mode Seed: {state.seed}[/bold cyan]")
+        console.print("[dim]Share this seed with friends to replay this exact quiz against them![/dim]")
+    
+    console.print("\n[green]Thanks for playing![/green]")
 
 
 if __name__ == "__main__":

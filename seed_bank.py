@@ -28,7 +28,13 @@ import time
 import shutil
 
 from pydantic import BaseModel, Field
-import litellm
+try:
+    from litellm import acompletion, AuthenticationError, NotFoundError, RateLimitError
+except ImportError:
+    acompletion = None  # Handle environments where litellm fails to install
+    AuthenticationError = type('AuthenticationError', (Exception,), {}) # Mock exceptions
+    NotFoundError = type('NotFoundError', (Exception,), {})
+    RateLimitError = type('RateLimitError', (Exception,), {})
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv, set_key
 
@@ -39,12 +45,13 @@ from database import DATABASE_DECRYPTION_KEY
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MAX_QUESTIONS = 10_000
-MIN_VIABLE    = 50       # Minimum questions to actually swap the bank
+MIN_VIABLE    = 20       # Minimum questions to actually save the bank
 BATCH_SIZE    = 40
 MAX_CONCURRENT = 5
 DB_PATH         = "questions.enc"
 OFFICIAL_BACKUP = "questions.enc.official"
-CUSTOM_RAW      = "questions_custom_raw.json"
+BANKS_DIR       = "banks"
+INDEX_PATH      = os.path.join(BANKS_DIR, "index.json")
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 class Question(BaseModel):
@@ -191,14 +198,60 @@ async def generate_all(model: str, topics: str, target: int, save_path: str) -> 
 
 
 # ── Encrypt and save the custom bank ─────────────────────────────────────────
-def save_custom_bank(questions: list[dict]):
+def save_custom_bank(questions: list[dict], bank_name: str, topics: str) -> str:
     from database import DATABASE_DECRYPTION_KEY
+    import re
+    from datetime import datetime
+    
+    # 1. Generate path
+    if not os.path.exists(BANKS_DIR):
+        os.makedirs(BANKS_DIR)
+        
+    slug = re.sub(r'[^a-z0-9]+', '_', bank_name.lower()).strip('_')
+    if not slug:
+        slug = "custom_bank"
+        
+    file_path = os.path.join(BANKS_DIR, f"{slug}.enc")
+    
+    # 2. Encrypt
     cipher = Fernet(DATABASE_DECRYPTION_KEY)
-    # Use bank_version=0 for user custom banks (no version stamp)
     envelope = {"bank_version": 0, "custom": True, "questions": questions}
     encrypted = cipher.encrypt(json.dumps(envelope).encode("utf-8"))
-    with open(DB_PATH, "wb") as f:
+    with open(file_path, "wb") as f:
         f.write(encrypted)
+        
+    # 3. Update index.json
+    from database import get_active_bank_info, _ensure_banks_index
+    _ensure_banks_index()
+    
+    try:
+        with open(INDEX_PATH, "r") as f:
+            index_data = json.load(f)
+    except Exception:
+        index_data = {"banks": [], "active_bank_id": "official"}
+    
+    # Check if we are updating an existing custom bank
+    bank_entry = {
+        "id": slug,
+        "name": bank_name,
+        "path": file_path.replace("\\", "/"),
+        "question_count": len(questions),
+        "bank_version": 0,
+        "is_official": False,
+        "topics": topics,
+        "created_at": datetime.now().strftime("%Y-%m-%d")
+    }
+    
+    existing_idx = next((i for i, b in enumerate(index_data["banks"]) if b["id"] == slug), None)
+    if existing_idx is not None:
+        index_data["banks"][existing_idx] = bank_entry
+    else:
+        index_data["banks"].append(bank_entry)
+        
+    with open(INDEX_PATH, "w") as f:
+        json.dump(index_data, f, indent=2)
+        
+    return file_path
 
 
 # ── Interactive wizard helpers ────────────────────────────────────────────────
@@ -221,17 +274,31 @@ async def main():
     print("=" * 60)
     print("  🏛️  WWQ Custom Question Bank Creator")
     print("=" * 60)
+    print("  💡 Recommended models for efficiency:")
+    print("     gemini/gemini-2.5-flash  (fast, free tier available)")
+    print("     openai/gpt-4o-mini       (cheap, very capable)")
+    print("     ollama/qwen2.5:0.5b      (fully local, no key needed)\n")
 
     # Interactive wizard if flags not fully supplied
+    bank_name = prompt("  Bank Name", "My Custom Bank")
     count  = args.count  or int(prompt("  How many questions? (max 10,000)", "500"))
     count  = min(count, MAX_QUESTIONS)
     topics = args.topics or prompt("  Topics (comma-separated)", "WW1 and WW2 History")
     model  = args.model  or prompt("  LLM model", "gemini/gemini-2.5-flash")
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("OPENAI_API_KEY") or \
               prompt("  API key (or press Enter to use .env value)", "")
+              
+    import re
+    slug = re.sub(r'[^a-z0-9]+', '_', bank_name.lower()).strip('_')
+    if not slug:
+        slug = "custom_bank"
+    custom_raw_path = os.path.join(BANKS_DIR, f"{slug}_raw_progress.json")
+    if not os.path.exists(BANKS_DIR):
+        os.makedirs(BANKS_DIR)
 
     print(f"\n  ℹ  Generating {count} questions about: {topics}")
     print(f"  ℹ  Using model: {model}")
+    print(f"  ℹ  Will map to: banks/{slug}.enc")
     print()
 
     # Validate API key and model first
@@ -249,25 +316,24 @@ async def main():
 
     # Generate questions
     print(f"🤖 Generating {count} questions...\n")
-    questions = await generate_all(model, topics, count, CUSTOM_RAW)
+    questions = await generate_all(model, topics, count, custom_raw_path)
 
     if len(questions) < MIN_VIABLE:
         print(f"\n❌ Seeding failed: only {len(questions)} questions generated (minimum {MIN_VIABLE} required).")
-        print(f"   Your official bank is preserved at {OFFICIAL_BACKUP}")
-        print("   Restore it via: Settings → Manage Bank → Restore Official")
-        if os.path.exists(CUSTOM_RAW):
-            os.remove(CUSTOM_RAW)
+        if os.path.exists(custom_raw_path):
+            os.remove(custom_raw_path)
         sys.exit(1)
 
     # Save custom bank
-    save_custom_bank(questions)
-    if os.path.exists(CUSTOM_RAW):
-        os.remove(CUSTOM_RAW)   # Clean up temp file
+    saved_path = save_custom_bank(questions, bank_name, topics)
+    if os.path.exists(custom_raw_path):
+        os.remove(custom_raw_path)   # Clean up temp file
 
-    print(f"\n✅ Custom bank of {len(questions)} questions saved to {DB_PATH}")
-    print(f"📦 Official bank backed up at {OFFICIAL_BACKUP}")
-    print("\n   To share your bank with friends: copy questions.enc to their game folder.")
-    print("   To restore the official bank: Settings → Manage Bank → Restore Official")
+    print(f"\n✅ Custom bank '{bank_name}' ({len(questions)} questions) saved to {saved_path}")
+    print("📦 Note: The official bank remains safely backed up at questions.enc.official")
+    print("\n   To play with this bank, start the game and select it via:")
+    print("      Settings → Manage Bank → Select Active Bank")
+    print("   To share it with friends, send them the .enc file and place it in their banks/ folder.")
 
 
 if __name__ == "__main__":
