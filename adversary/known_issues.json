@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-03-16",
+  "fragile_areas": [
+    "decode_seed: must handle both new short format (XXXXXX or XXXXXX:Topic) and old base64 format",
+    "generate_seed: default topic must NOT append ':' suffix",
+    "database.py: seen_questions filter must handle empty set without crashing",
+    "database.py: DATABASE_DECRYPTION_KEY must match the key used when questions.enc was generated",
+    "generate_db.py: litellm model string must exactly match Google API endpoint names (e.g. gemini/gemini-2.5-flash)",
+    "generate_db.py: questions_raw.json resume logic must correctly count existing questions before generating more",
+    "agents.py: seen_questions is passed by reference; local_bank must never mutate it during filtering",
+    "main.py: play_round returns None if question is None; callers must handle this gracefully",
+    "wwq.bat / wwq.sh: OTA_URL must point to raw.githubusercontent.com, not the GitHub web UI URL"
+  ],
+  "regression_tests": [
+    "test_short_seed_default_topic",
+    "test_short_seed_custom_topic",
+    "test_seed_roundtrip",
+    "test_old_base64_seed_backward_compat",
+    "test_database_loads_and_decrypts",
+    "test_database_question_count",
+    "test_no_duplicate_questions_in_session",
+    "test_get_question_respects_difficulty",
+    "test_seen_questions_not_mutated_by_filter",
+    "test_game_state_defaults"
+  ],
+  "known_good_model_strings": [
+    "gemini/gemini-2.5-flash",
+    "gemini/gemini-2.5-pro",
+    "gemini/gemini-2.0-flash"
+  ]
+}
