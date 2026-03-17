@@ -99,7 +99,8 @@ Theoretical Maximum: 80.0
 
 ## Developer Guide: Re-seeding the Knowledge Bank
 
-If you wish to update the 2,046 questions or generate a new specialized bank (e.g., Vietnam War):
+### Full Re-seed (from scratch)
+If you want to build an entirely new bank (e.g., a Vietnam War edition):
 
 1. **Get an API Key:** Add your Gemini API Key to `.env`.
 2. **Configure `generate_db.py`:** Update the prompt or the `target_questions` count.
@@ -111,7 +112,32 @@ If you wish to update the 2,046 questions or generate a new specialized bank (e.
    ```bash
    python encrypt_db.py
    ```
-5. **Update the Secret Key:** Copy the new encryption key printed in your terminal and update the `DATABASE_DECRYPTION_KEY` inside `database.py`.
+5. **Update the Secret Key:** Copy the new encryption key and update `DATABASE_DECRYPTION_KEY` in `database.py`.
+
+### Partial Refresh (history-driven, recommended)
+After players have asked many questions, use `refresh_db.py` to retire the most over-used questions and replace them with fresh ones — without regenerating the entire bank.
+
+The default replaces **200 questions** (~10% of the bank) that have been asked **3 or more times** globally. This keeps the game feeling varied without the cost of a full re-seed.
+
+```bash
+# See what would be replaced (no changes made)
+python refresh_db.py --dry-run
+
+# Run the actual refresh (requires GOOGLE_API_KEY in .env)
+python refresh_db.py
+
+# Custom options
+python refresh_db.py --count 128 --threshold 5
+```
+
+After refreshing, push the updated `questions.enc` to GitHub so OTA updates distribute it to all players.
+
+```bash
+git add questions.enc
+git commit -m "refresh: retire top-200 overused questions"
+git push origin master
+```
+
 
 ## Troubleshooting
 
@@ -124,5 +150,4 @@ If you wish to update the 2,046 questions or generate a new specialized bank (e.
 This project is open-source. Feel free to submit Pull Requests to improve the historical accuracy of the question bank or to add new LLM providers!
 
 ---
-*Created with ❤️ by the WW-Trivia community.*
 
