@@ -90,7 +90,7 @@ class TestDatabase:
 
     def test_get_question_returns_valid_question(self, bank):
         """get_question must return a well-formed Question object."""
-        q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set())
+        q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set(), seen_answers=set())
         assert q is not None, "get_question returned None for difficulty=1"
         assert q.question_text, "question_text must not be empty"
         assert q.correct_answer in q.options, "correct_answer must be one of the options"
@@ -99,25 +99,57 @@ class TestDatabase:
     def test_get_question_respects_difficulty(self, bank):
         """get_question must return a question matching the requested difficulty."""
         for diff in [1, 2, 3, 4, 5]:
-            q = bank.get_question(difficulty=diff, random_seed=42, seen_questions=set())
+            q = bank.get_question(difficulty=diff, random_seed=42, seen_questions=set(), seen_answers=set())
             if q:  # Some difficulties may have fewer questions
                 assert q.difficulty == diff, f"Requested diff={diff}, got {q.difficulty}"
 
     def test_no_duplicate_questions_in_session(self, bank):
         """Questions must not repeat within a single session."""
         seen = set()
+        seen_a = set()
         for i in range(20):
-            q = bank.get_question(difficulty=1, random_seed=i, seen_questions=seen)
+            q = bank.get_question(difficulty=1, random_seed=i, seen_questions=seen, seen_answers=seen_a)
             if q is None:
                 break
             assert q.question_text not in seen, f"Duplicate question returned at iteration {i}!"
             seen.add(q.question_text)
 
+    def test_no_duplicate_answers_in_session(self, bank):
+        """Answers must not repeat within a single session, even with different question text."""
+        from database import normalize_answer
+        seen_q = set()
+        seen_a = set()
+        for i in range(40):
+            q = bank.get_question(difficulty=1, random_seed=i, seen_questions=seen_q, seen_answers=seen_a)
+            if q is None:
+                break
+            n_ans = normalize_answer(q.correct_answer)
+            assert n_ans not in seen_a, f"Duplicate answer '{q.correct_answer}' returned at iteration {i}!"
+            seen_q.add(q.question_text)
+            seen_a.add(n_ans)
+
+    def test_topic_fallback_respects_deduplication(self, bank):
+        """When an exact topic match isn't found, the fallback must still NEVER return a seen question or answer."""
+        from database import normalize_answer
+        seen_q = set()
+        seen_a = set()
+        
+        # We request a nonsense topic to force the fallback loop
+        for i in range(10):
+            q = bank.get_question(difficulty=1, random_seed=i, topic="Extremely Obscure Fake Topic 123", seen_questions=seen_q, seen_answers=seen_a)
+            if q is None:
+                break
+            n_ans = normalize_answer(q.correct_answer)
+            assert q.question_text not in seen_q, "Fallback loop returned a seen question!"
+            assert n_ans not in seen_a, "Fallback loop returned a seen answer!"
+            seen_q.add(q.question_text)
+            seen_a.add(n_ans)
+
     def test_seen_questions_not_mutated_by_filter(self, bank):
         """The seen_questions set must not be modified by get_question."""
         seen = {"Some existing question that definitely is not in the bank"}
         original_size = len(seen)
-        bank.get_question(difficulty=1, random_seed=99, seen_questions=seen)
+        bank.get_question(difficulty=1, random_seed=99, seen_questions=seen, seen_answers=set())
         assert len(seen) == original_size, "get_question must not mutate seen_questions"
 
 
@@ -205,7 +237,7 @@ class TestQuestionHistory:
         for q in bank._questions[:20]:
             record_asked(history, q.question_text)
         # get_question should still return something without crashing
-        q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set(), history=history)
+        q = bank.get_question(difficulty=1, random_seed=42, seen_questions=set(), seen_answers=set(), history=history)
         # May be None if truly exhausted, but must not raise
         assert q is None or hasattr(q, "question_text")
 
@@ -224,6 +256,9 @@ class TestGameModes:
 
     def test_vs_mode_determinism(self):
         """draw_vs_questions must return identical lists for the same seed, and different lists for different seeds."""
+        import sys, os
+        ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sys.path.insert(0, ROOT)
         from database import LocalKnowledgeBank
         from main import draw_vs_questions
         

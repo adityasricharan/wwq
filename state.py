@@ -20,6 +20,7 @@ class GameState(BaseModel):
     override_difficulty: Optional[int] = None
     question_history: list[dict] = []
     seen_questions: set[str] = set()
+    seen_answers: set[str] = set()
     game_mode: str = "adaptive"       # "adaptive" | "vs"
     total_questions: int = 20         # Configurable at game start
     vs_question_list: list[str] = []  # Pre-drawn list for vs mode

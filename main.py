@@ -183,7 +183,10 @@ def settings_menu(state: GameState):
 def draw_vs_questions(bank, seed_str: str, count: int) -> list[str]:
     """Deterministically draws `count` question texts using the given seed.
     Uses an isolated RNG so external random calls don't break determinism.
+    Strictly enforces that no two questions share the same answer.
     """
+    from database import normalize_answer
+    
     # Convert string seed to integer for random.Random
     seed_int = int(hashlib.sha256(seed_str.encode('utf-8')).hexdigest()[:8], 16)
     rng = random.Random(seed_int)
@@ -191,8 +194,18 @@ def draw_vs_questions(bank, seed_str: str, count: int) -> list[str]:
     candidates = bank._questions[:]
     rng.shuffle(candidates)
     
-    # If asked for more than exists, cap it seamlessly
-    return [q.question_text for q in candidates[:count]]
+    drawn_texts = []
+    seen_answers = set()
+    
+    for q in candidates:
+        ans = normalize_answer(q.correct_answer)
+        if ans not in seen_answers:
+            drawn_texts.append(q.question_text)
+            seen_answers.add(ans)
+            if len(drawn_texts) == count:
+                break
+                
+    return drawn_texts
 
 
 def setup_game() -> GameState:
@@ -307,7 +320,7 @@ def play_round(state: GameState, history: dict):
             
         while not valid and attempts < 3:
             try:
-                question = generate_question(state.config.llm_provider, state.config.llm_model, state.config.topic, state.config.format, diff_to_use, model_seed, state.seen_questions, history=history)
+                question = generate_question(state.config.llm_provider, state.config.llm_model, state.config.topic, state.config.format, diff_to_use, model_seed, state.seen_questions, state.seen_answers, history)
                 status.update("[bold cyan]The Fact Checker is reviewing the question...[/bold cyan]")
                 
                 validation = validate_question(state.config.llm_provider, state.config.llm_model, question)
@@ -388,6 +401,10 @@ def play_round(state: GameState, history: dict):
     chosen_answer = options[int(choice_idx) - 1]
     
     state.seen_questions.add(question.question_text)
+    
+    from database import normalize_answer
+    state.seen_answers.add(normalize_answer(question.correct_answer))
+    
     qh.record_asked(history, question.question_text)
     
     earned = 0

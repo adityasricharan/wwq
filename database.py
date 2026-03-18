@@ -3,6 +3,12 @@ import json
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, Field
 
+import re
+
+def normalize_answer(ans: str) -> str:
+    """Lowercases and strips non-alphanumeric characters for loose answer collision detection."""
+    return re.sub(r'[^a-z0-9]', '', ans.lower())
+
 # Secret symmetric key generated specifically for this game instance
 DATABASE_DECRYPTION_KEY = b'F13KDlnu_x0tiDfYT0K8SVdEaGgDgUFJUgM-LydsKW0='
 
@@ -49,9 +55,7 @@ class LocalKnowledgeBank:
         except Exception as e:
             print(f"[ERROR] Failed to decrypt local knowledge bank: {e}")
 
-
-
-    def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None, history: dict = None) -> Question:
+    def get_question(self, difficulty: int, random_seed: int, topic: str = "General WW1 and WW2 History", seen_questions: set = None, seen_answers: set = None, history: dict = None) -> Question:
         """Finds a matching question using difficulty, topic, and inverse-frequency weighted sampling.
 
         Args:
@@ -59,6 +63,7 @@ class LocalKnowledgeBank:
             random_seed: Deterministic seed for reproducible sessions.
             topic: Topic filter; 'General WW1 and WW2 History' matches all.
             seen_questions: Set of question texts already shown this session.
+            seen_answers: Set of normalized answers already shown this session.
             history: The global question history dict from question_history.py.
                      If None, falls back to uniform random sampling (no weighting).
         """
@@ -69,9 +74,16 @@ class LocalKnowledgeBank:
         candidates = []
         if seen_questions is None:
             seen_questions = set()
+        if seen_answers is None:
+            seen_answers = set()
 
         for q in self._questions:
             if q.question_text in seen_questions:
+                continue
+            
+            # STRCITLY enforce we don't show the same answer concept twice in a session
+            n_ans = normalize_answer(q.correct_answer)
+            if n_ans in seen_answers:
                 continue
 
             # For Local Bank, "General WW1 and WW2 History" allows everything.
@@ -84,10 +96,12 @@ class LocalKnowledgeBank:
                 if is_match and q.difficulty == difficulty:
                     candidates.append(q)
 
-        # If no strict match found, relax constraints
+        # If no strict match found, relax constraints (ignore topic/difficulty) 
+        # BUT strictly maintain uniqueness constraints (seen_questions, seen_answers)
         if not candidates:
             for q in self._questions:
-                if q.question_text not in seen_questions:
+                n_ans = normalize_answer(q.correct_answer)
+                if q.question_text not in seen_questions and n_ans not in seen_answers:
                     candidates.append(q)
 
         if not candidates:

@@ -11,7 +11,7 @@ This game utilizes a massive local encrypted knowledge bank consisting of **2,04
 - **Custom Question Banks:** Generate your own offline, encrypted question banks around any specific topic (`banks/<slug>.enc`) and swap them via settings.
 - **Dynamic Scoring Penalties:** Questions are graded on a strict 1-5 difficulty curve. Miss a Level 5 (Insane) question and you lose 1.25 points. Miss a Level 1 (Easy) question and you lose 5 points.
 - **End-Game Review Matrix:** A beautiful `Rich.Table` printout at the end of every game breaking down exactly what you missed, the correct answers, and your resulting 1-10 absolute "Historical Knowledge Scale".
-- **Zero Repetition Engine:** A deterministic `seen_questions` algorithm ensures you will *never* see the same question twice in a single sitting.
+- **Zero Repetition Engine:** A strict `seen_questions` + `seen_answers` algorithm ensures you will *never* see the same question **or the same answer concept** twice in a single sitting — even under topic fallback conditions.
 - **Over-The-Air (OTA) Updates:** The game automatically pings GitHub for centralized question-bank updates every time it boots.
 - **AI Expansion Integration:** Optionally, plug in a Google, OpenAI, or local Ollama API key via the settings menu to expand the game beyond the curated offline bank!
 
@@ -178,6 +178,31 @@ git add questions.enc version.txt
 git commit -m "refresh: retire top-200 overused questions"
 git push origin master
 ```
+
+### Answer Deduplication (Offline Bank Cleanup)
+
+The bank may contain questions that share the same answer phrased differently (e.g., two questions whose correct answer is "George Patton" vs "General Patton"). At runtime, the engine already prevents both answers from appearing in the same session via `seen_answers`. To clean the bank itself:
+
+```bash
+# Preview collisions (no changes to disk)
+python dedupe_bank.py --dry-run
+
+# Run full cleanup — requires a Google API key
+python dedupe_bank.py --api-key YOUR_KEY
+
+# Or with key in .env:
+python dedupe_bank.py
+```
+
+**How it works:**
+1. Scans `questions.enc` and groups questions with identical normalized answers.
+2. Calls `gemini-2.5-flash` to semantically verify if grouped answers are genuinely the same concept.
+3. Deletes confirmed duplicates and generates exact 1-for-1 replacements targeting the same topic and difficulty level.
+4. Re-encrypts and saves the bank — size is preserved exactly.
+
+> **Note:** On the free Gemini API tier (15 req/min), cleaning ~1,500 duplicates takes roughly 1–2 hours. Runtime deduplication (`seen_answers`) protects players immediately regardless of whether the offline bank has been cleaned.
+
+---
 
 ### Full Re-seed (from scratch)
 
